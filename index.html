@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#10161c">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg">
+<title>Dome Site Layout</title>
+<style>
+  :root { --ink:#f3f6f8; --dim:#b8c4cc; --panel:rgba(16,22,28,.82); --line:rgba(255,255,255,.22);
+          --accent:#ffb020; --ok:#3ddc84; --warn:#ffd23f; --bad:#ff5a4f; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; height:100%; background:#10161c; color:var(--ink); overflow:hidden;
+              font:15px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  canvas#view { position:fixed; inset:0; width:100%; height:100%; display:block; touch-action:none; }
+  #overlay { position:fixed; inset:0; pointer-events:none; display:flex; flex-direction:column;
+             justify-content:space-between; padding:max(10px,env(safe-area-inset-top)) 10px max(12px,env(safe-area-inset-bottom)); }
+  #overlay > * { pointer-events:auto; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:10px 12px;
+           backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px); }
+  #top { display:flex; flex-direction:column; gap:8px; }
+  #status { font-weight:600; }
+  #status small { display:block; font-weight:400; color:var(--dim); margin-top:2px; }
+  #readout { font-variant-numeric:tabular-nums; font-size:13px; color:var(--dim); white-space:pre-line; }
+  #readout b { color:var(--ink); }
+  #bottom { display:flex; flex-direction:column; gap:8px; }
+  button, select { font:inherit; color:var(--ink); background:rgba(255,255,255,.10); border:1px solid var(--line);
+           border-radius:10px; min-height:44px; padding:8px 12px; touch-action:manipulation; }
+  button:active { background:rgba(255,255,255,.28); }
+  button.primary { background:var(--accent); color:#1b1300; border-color:transparent; font-weight:700; font-size:17px; min-height:56px; width:100%; }
+  button.on { background:rgba(255,176,32,.28); border-color:var(--accent); }
+  button:disabled { opacity:.4; }
+  .row { display:flex; gap:6px; flex-wrap:wrap; }
+  .row > * { flex:1 1 0; }
+  .grid { display:grid; grid-template-columns:repeat(5,1fr); gap:6px; }
+  .grid button { padding:4px; font-size:18px; }
+  .grid .lbl { font-size:11px; display:block; color:var(--dim); line-height:1.1; }
+  .hidden { display:none !important; }
+  #sheet { position:fixed; inset:0; background:rgba(8,12,16,.94); padding:max(14px,env(safe-area-inset-top)) 14px 14px;
+           overflow:auto; z-index:5; pointer-events:auto; }
+  #sheet h2 { margin:0 0 8px; font-size:18px; }
+  #sheet pre { white-space:pre-wrap; font:13px/1.45 ui-monospace,Menlo,Consolas,monospace; margin:0 0 12px; }
+  #sheet .row { position:sticky; bottom:0; background:rgba(8,12,16,.94); padding-top:8px; }
+  label.chk { display:flex; align-items:center; gap:10px; min-height:44px; }
+  label.chk input { width:22px; height:22px; }
+  #intro p { margin:6px 0; color:var(--dim); }
+  #intro ol { margin:6px 0 10px; padding-left:20px; color:var(--dim); }
+  #tapback { position:fixed; inset:0; display:none; z-index:6; align-items:flex-end; justify-content:center; padding-bottom:max(18px,env(safe-area-inset-bottom)); }
+  #tapback span { background:var(--panel); border-radius:20px; padding:8px 14px; font-size:13px; animation:fadeout 2.6s forwards; }
+  @keyframes fadeout { 0%,70% { opacity:1; } 100% { opacity:0; } }
+  body.clean #top, body.clean #bottom, body.clean #sheet { display:none !important; }
+  body.clean #tapback { display:flex; }
+  #ver { font-size:11px; color:var(--dim); text-align:right; }
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+
+<div id="overlay">
+  <div id="top">
+    <div class="panel" id="statusPanel">
+      <div id="status">Loading…</div>
+      <div id="readout"></div>
+    </div>
+  </div>
+
+  <div id="bottom">
+    <!-- before AR starts -->
+    <div class="panel" id="intro">
+      <div class="row" style="margin-bottom:8px">
+        <select id="design" aria-label="Deck design"></select>
+      </div>
+      <ol>
+        <li>Push a stake in where the dome centre goes. Put a second stake where the door should face.</li>
+        <li>Start AR, sweep the phone slowly over the ground until a ring appears.</li>
+        <li>Aim the ring at each stake and tap. Then nudge the layout and mark trees.</li>
+      </ol>
+      <div class="row" style="margin-bottom:8px"><button class="jsShade">Show shaded model</button><button class="jsHide">Hide buttons</button></div>
+      <button class="primary" id="btnStart">Start AR</button>
+      <p id="support"></p>
+      <div id="ver"></div>
+    </div>
+
+    <!-- placing -->
+    <div class="panel hidden" id="place">
+      <button class="primary" id="btnPlace">Set dome centre here</button>
+      <div class="row" style="margin-top:6px">
+        <button id="btnBack">Start over</button>
+        <button id="btnExit1">Exit AR</button>
+      </div>
+    </div>
+
+    <!-- adjusting -->
+    <div class="panel hidden" id="adjust">
+      <div class="grid">
+        <button data-act="rotL">⟲<span class="lbl">turn</span></button>
+        <button data-act="fwd">↑<span class="lbl">away</span></button>
+        <button data-act="rotR">⟳<span class="lbl">turn</span></button>
+        <button data-act="up">⤒<span class="lbl">raise</span></button>
+        <button id="btnStep">6"<span class="lbl">step</span></button>
+        <button data-act="left">←<span class="lbl">left</span></button>
+        <button data-act="back">↓<span class="lbl">toward</span></button>
+        <button data-act="right">→<span class="lbl">right</span></button>
+        <button data-act="down">⤓<span class="lbl">lower</span></button>
+        <button id="btnMore">☰<span class="lbl">more</span></button>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button class="primary" id="btnMark" style="min-height:48px;font-size:16px">Mark tree at ring</button>
+      </div>
+      <div class="row" style="margin-top:6px"><button id="btnRestore" class="hidden"></button></div>
+      <div class="row" style="margin-top:6px"><button class="jsShade">Show shaded model</button><button class="jsHide">Hide buttons</button></div>
+      <div class="row" style="margin-top:6px">
+        <button id="btnUndo">Undo mark</button>
+        <button id="btnResults">Results</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="tapback"><span>Tap anywhere to bring the buttons back</span></div>
+
+  <!-- full-screen sheets (inside the overlay so they show during AR) -->
+  <div id="sheet" class="hidden">
+    <div id="sheetMore" class="hidden">
+      <h2>Layers and tools</h2>
+      <div class="row"><select id="design2" aria-label="Deck design"></select></div>
+      <label class="chk"><input type="checkbox" data-layer="deck" checked> Deck outline and surface</label>
+      <label class="chk"><input type="checkbox" data-layer="piers" checked> Piers and footings</label>
+      <label class="chk"><input type="checkbox" data-layer="beams"> Beam lines</label>
+      <label class="chk"><input type="checkbox" data-layer="dome" checked> Dome frame and door</label>
+      <label class="chk"><input type="checkbox" data-layer="extras" checked> Steps and water station</label>
+      <label class="chk"><input type="checkbox" data-layer="clear"> 8 ft tree-clearance line</label>
+      <h2 style="margin-top:12px">Fix drift</h2>
+      <p style="color:var(--dim);margin:0 0 8px">If the layout has slid off your stakes, pick a stake below, then aim the ring at the real stake and confirm on the live view. Everything (layout and tree marks) moves together.</p>
+      <div class="row">
+        <button id="btnRepin1">Re-pin centre stake</button>
+        <button id="btnRepin2">Re-pin door stake</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button id="btnRestart">Start over</button>
+        <button id="btnExit2">Exit AR</button>
+      </div>
+      <div class="row"><button id="btnCloseMore" class="primary">Done</button></div>
+    </div>
+    <div id="sheetResults" class="hidden">
+      <h2>Layout results</h2>
+      <pre id="resultsText"></pre>
+      <div class="row">
+        <button id="btnCopy">Copy text</button>
+        <button id="btnCloseResults" class="primary">Done</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
