@@ -13,7 +13,7 @@ function ftin(ft) { const neg = ft < 0; let i = Math.round(Math.abs(ft) * 12); c
 const sta = (ft) => { const r = Math.round(ft); return `${Math.floor(r / 100)}+${String(r % 100).padStart(2, '0')}`; };
 
 // ---------- design parameters ----------
-const P = Object.assign({ width: 12, depthIn: 6, mode: 'ease', maxGrade: 12, balance: 50, method: 'stand', slope: 2, baseIn: 6 }, store.get('ccdw_params3', {}));
+const P = Object.assign({ width: 12, depthIn: 6, mode: 'ease', maxGrade: 12, balance: 50, curve: true, method: 'stand', slope: 2, baseIn: 6 }, store.get('ccdw_params3', {}));
 const STEEP = 12.05;            // % grade flagged as steep for a gravel drive
 // Material assumptions (rough; confirm with the quarry ticket)
 const T33C = 2.0;            // tons per cubic yard of crusher-run base compacted in place (Ohio DOT factor, 4,000 lb/cu yd)
@@ -36,41 +36,51 @@ function compute() {
   for (let i = 1; i < n; i++) s.push(s[i - 1] + Math.hypot(stations[i].p.x - stations[i - 1].p.x, stations[i].p.z - stations[i - 1].p.z) / FT);
   const g = stations.map((st) => (st.p.y - stations[0].p.y) / FT);
   const d = P.depthIn / 12, L = s[n - 1];
-  let fin;
-  if (P.mode === 'follow' || n < 2 || L < 0.5) fin = g.map((v) => v + d);
-  else if (P.mode === 'ease') {
-    // Follow the ground, but never steeper than the max grade. U = the lowest line that needs no cut, Lw = the highest
-    // line that needs no fill; any blend of the two also keeps the grade limit, so "balance" trades fill for cut.
-    const m = P.maxGrade / 100, a = P.balance / 100, t = g.map((v) => v + d);
-    fin = t.map((_, i) => { let U = -Infinity, Lw = Infinity;
-      for (let j = 0; j < n; j++) { const k = m * Math.abs(s[i] - s[j]); U = Math.max(U, t[j] - k); Lw = Math.min(Lw, t[j] + k); }
-      return (1 - a) * U + a * Lw; });
-  } else {   // one even slope end to end, lifted until the shallowest spot still has the full depth
-    const line = (i) => g[0] + ((g[n - 1] - g[0]) * s[i]) / L;
-    let lift = -Infinity; for (let i = 0; i < n; i++) lift = Math.max(lift, g[i] + d - line(i));
-    fin = g.map((_, i) => line(i) + lift);
-  }
+  // culverts: ground low points with at least 1 ft of rise on both sides (one per dip), plus manual marks
   const auto = stations.map((st, i) => {
     if (i === 0 || i === n - 1) return false;
     const left = Math.max(...g.slice(0, i)), right = Math.max(...g.slice(i + 1));
     return g[i] <= g[i - 1] && g[i] <= g[i + 1] && Math.min(left, right) - g[i] >= 1.0;
-  });   // one per dip: keep the lowest within 40 ft
-  for (let i = 0; i < n; i++) if (auto[i]) for (let j = 0; j < n; j++) if (j !== i && auto[j] && Math.abs(s[i] - s[j]) < 40 && (g[j] < g[i] || (g[j] === g[i] && j < i))) { auto[i] = false; break; }
+  });
+  for (let i = 0; i < n; i++) if (auto[i]) for (let j = 0; j < n; j++) if (j !== i && Math.abs(s[i] - s[j]) < 40
+    && (stations[j].culvert === true || (auto[j] && (g[j] < g[i] || (g[j] === g[i] && j < i))))) { auto[i] = false; break; }
   const culvert = stations.map((st, i) => (st.culvert !== undefined ? st.culvert : auto[i]));
-  // lift the road over each culvert so the pipe has its cover, keeping the grade limit either side
   const need = (PIPE_IN + COVER_IN) / 12, mg = (P.mode === 'ease' ? P.maxGrade : 12) / 100;
-  fin = fin.map((v, i) => { let f = v; for (let j = 0; j < n; j++) if (culvert[j]) f = Math.max(f, g[j] + need - mg * Math.abs(s[i] - s[j])); return f; });
+  const W = P.width, sl = P.slope, base = P.baseIn / 12;
+  const area = (h) => (h > 0 ? W * h + sl * h * h : 0);
+  let fin, xs = s, gs = g, fs;
+  if (P.mode === 'ease' && n >= 2 && L >= 0.5) {
+    // Worked on a 2 ft grid. Follow the ground, never steeper than the max grade: U = the lowest line that needs no cut,
+    // Lw = the highest line that needs no fill; any blend keeps the grade limit, so "balance" trades fill for cut.
+    const X = []; for (let x = 0; x < L - 0.5; x += 2) X.push(x); X.push(L);
+    const at = (px, py, x) => { let i = 0; while (i < px.length - 2 && px[i + 1] < x) i++; const w = px[i + 1] - px[i]; return py[i] + (w > 1e-6 ? (x - px[i]) / w : 0) * (py[i + 1] - py[i]); };
+    const gd = X.map((x) => at(s, g, x)), N = X.length, m = mg, a = P.balance / 100, K = P.curve ? 0.005 : 0;
+    let f = gd.map((_, i) => { let U = -Infinity, Lw = Infinity;
+      for (let j = 0; j < N; j++) { const k = m * Math.abs(X[i] - X[j]); U = Math.max(U, gd[j] + d - k); Lw = Math.min(Lw, gd[j] + d + k); }
+      return (1 - a) * U + a * Lw; });
+    // Rounding: roll a parabola over the profile. "Opening" shaves sharp crests (cut), "closing" fills sharp dips (fill),
+    // so the grade never changes faster than about 5% per 10 ft. Both keep the max grade.
+    const dil = (arr) => arr.map((_, i) => { let v = -Infinity; for (let j = 0; j < N; j++) v = Math.max(v, arr[j] - (K / 2) * (X[i] - X[j]) ** 2); return v; });
+    const ero = (arr) => arr.map((_, i) => { let v = Infinity; for (let j = 0; j < N; j++) v = Math.min(v, arr[j] + (K / 2) * (X[i] - X[j]) ** 2); return v; });
+    if (K > 0 && a > 0) f = dil(ero(f));
+    for (let j = 0; j < n; j++) if (culvert[j]) f = f.map((v, i) => Math.max(v, g[j] + need - m * Math.abs(X[i] - s[j])));   // pipe cover
+    if (K > 0) f = ero(dil(f));
+    fin = s.map((x) => at(X, f, x)); xs = X; gs = gd; fs = f;
+  } else {
+    if (P.mode === 'even' && n >= 2 && L >= 0.5) {   // one even slope end to end, lifted until the shallowest spot still has the full depth
+      const line = (i) => g[0] + ((g[n - 1] - g[0]) * s[i]) / L;
+      let lift = -Infinity; for (let i = 0; i < n; i++) lift = Math.max(lift, g[i] + d - line(i));
+      fin = g.map((_, i) => line(i) + lift);
+    } else fin = g.map((v) => v + d);
+    fin = fin.map((v, i) => { let f = v; for (let j = 0; j < n; j++) if (culvert[j]) f = Math.max(f, g[j] + need - mg * Math.abs(s[i] - s[j])); return f; });
+    fs = fin;
+  }
   const fill = fin.map((v, i) => v - g[i]);
   const grade = []; for (let i = 0; i < n - 1; i++) grade.push(s[i + 1] - s[i] > 0.1 ? ((fin[i + 1] - fin[i]) / (s[i + 1] - s[i])) * 100 : 0);
-  // culverts: ground low points with at least 6 in of rise on both sides, plus manual marks
-  const W = P.width, sl = P.slope, base = P.baseIn / 12;
-  const area = (h) => (h > 0 ? W * h + sl * h * h : 0), wrap = (h) => (h > 0 ? W + (W + 2 * sl * h) + 2 * h * Math.hypot(1, sl) : 0);
-  let fillCy = 0, cutCy = 0, fabric = 0;
-  for (let i = 0; i < n - 1; i++) {
-    const len = s[i + 1] - s[i];
-    fillCy += ((area(fill[i]) + area(fill[i + 1])) / 2) * len / 27;
-    cutCy += ((area(-fill[i]) + area(-fill[i + 1])) / 2) * len / 27;
-    fabric += ((wrap(fill[i]) + wrap(fill[i + 1])) / 2) * len;
+  let fillCy = 0, cutCy = 0; const fabric = 0;
+  for (let i = 0; i < xs.length - 1; i++) {
+    const len = xs[i + 1] - xs[i], h0 = fs[i] - gs[i], h1 = fs[i + 1] - gs[i + 1];
+    fillCy += ((area(h0) + area(h1)) / 2) * len / 27; cutCy += ((area(-h0) + area(-h1)) / 2) * len / 27;
   }
   const baseCy = (W * base * L) / 27;   // 33C surface, full length
   let rockCy = 0; for (let i = 0; i < n; i++) if (culvert[i]) rockCy += Math.max(0, area(fill[i]) - W * base) * ROCK_LEN / 27 + APRON_CY;
@@ -157,7 +167,7 @@ function resultsText() {
   if (!r || r.n < 2) return 'Add at least two points along the centreline.';
   if (demo) L.push('DEMO DATA (made up). Start AR on site to survey the real driveway.', '');
   L.push(`Driveway ${Math.round(r.L)} ft long, ${P.width} ft wide, ${r.n} points`,
-    `Grade: ${P.mode === 'even' ? 'one even slope end to end' : P.mode === 'follow' ? 'follows the ground' : `follows the ground, eased to ${P.maxGrade}% max, ${P.balance}% cut`}, ${P.depthIn} in of fill on gentle ground`,
+    `Grade: ${P.mode === 'even' ? 'one even slope end to end' : P.mode === 'follow' ? 'follows the ground' : `follows the ground, eased to ${P.maxGrade}% max, ${P.balance}% cut${P.curve ? ', dips and crests rounded' : ''}`}, ${P.depthIn} in of fill on gentle ground`,
     `Steepest grade ${r.maxGrade.toFixed(1)}%${r.maxGrade > STEEP ? '  << STEEP for gravel' : ''} · deepest fill ${ftin(r.maxFill)}${r.minFill < 0 ? ` · deepest cut ${ftin(-r.minFill)}` : ''}`);
   if (closure) L.push(`Loop closure: ${ftin(closure.vert)} vertical, ${ftin(closure.horiz)} horizontal over ${Math.round(closure.walked)} ft walked (corrected)`);
   else if (!demo) L.push('Loop NOT closed: elevations carry uncorrected phone drift.');
@@ -354,6 +364,7 @@ function paintDesign() {
   $('pModeHelp').textContent = { ease: 'Least earthwork. The road follows the ground and only leaves it where the ground is steeper than the max grade. "Cut" lets it dig into the high side there instead of only filling the low side.',
     even: 'A straight slope from the first point to the last, lifted until the shallowest spot still has the fill depth. Simple, but it buries every dip.',
     follow: 'The road sits the same height above the ground everywhere, so it is as steep as the land.' }[P.mode];
+  $('pCurve').textContent = P.curve ? 'Round the dips and crests: on' : 'Round the dips and crests: off';
   $('pMethod').textContent = P.method === 'stand' ? 'Survey: stand on each point (best on slopes)' : 'Survey: aim the ring at each point';
   $('btnAdd').textContent = P.method === 'stand' && stations.length && session ? 'Add point where I stand' : 'Add point at ring';
 }
@@ -371,6 +382,7 @@ document.querySelectorAll('[data-p]').forEach((b) => b.addEventListener('click',
   store.set('ccdw_params3', P); paintDesign(); changed();
 }));
 $('pMode').addEventListener('click', () => { P.mode = MODES[(MODES.indexOf(P.mode) + 1) % MODES.length]; store.set('ccdw_params3', P); paintDesign(); changed(); });
+$('pCurve').addEventListener('click', () => { P.curve = !P.curve; store.set('ccdw_params3', P); paintDesign(); changed(); });
 $('pMethod').addEventListener('click', () => { P.method = P.method === 'stand' ? 'ring' : 'stand'; store.set('ccdw_params3', P); paintDesign(); });
 function loadSaved() {
   const st = store.get('ccdw_state', null); if (!st || !st.pts || st.pts.length < 2) return false;
