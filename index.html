@@ -37,6 +37,7 @@
   .grid button { padding:4px; font-size:18px; }
   .grid .lbl { font-size:11px; display:block; color:var(--dim); line-height:1.1; }
   .hidden { display:none !important; }
+  .deckrow button { padding:4px 8px; line-height:1.15; } .deckrow .lbl { display:block; font-size:11px; color:var(--dim); }
   #sheet { position:fixed; inset:0; background:rgba(8,12,16,.94); padding:max(14px,env(safe-area-inset-top)) 14px 14px;
            overflow:auto; z-index:5; pointer-events:auto; }
   #sheet h2 { margin:0 0 8px; font-size:18px; }
@@ -77,6 +78,7 @@
         <li>Aim the ring at each stake and tap. Then nudge the layout and mark trees.</li>
       </ol>
       <div class="row" style="margin-bottom:8px"><button class="jsShade">Show shaded model</button><button class="jsHide">Hide buttons</button></div>
+      <div class="row deckrow" style="margin-bottom:6px"><button class="jsDeckDn">Deck −3"</button><button class="jsDeckH">deck</button><button class="jsDeckUp">Deck +3"</button></div>
       <button class="primary" id="btnStart">Start AR</button>
       <p id="support"></p>
       <div id="ver"></div>
@@ -110,6 +112,7 @@
       </div>
       <div class="row" style="margin-top:6px"><button id="btnRestore" class="hidden"></button></div>
       <div class="row" style="margin-top:6px"><button class="jsShade">Show shaded model</button><button class="jsHide">Hide buttons</button></div>
+      <div class="row deckrow" style="margin-top:6px"><button class="jsDeckDn">Deck −3"</button><button class="jsDeckH">deck</button><button class="jsDeckUp">Deck +3"</button></div>
       <div class="row" style="margin-top:6px">
         <button id="btnUndo">Undo mark</button>
         <button id="btnResults">Results</button>

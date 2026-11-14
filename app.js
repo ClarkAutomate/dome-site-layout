@@ -125,6 +125,14 @@ function dispose(obj) {
 
 // ---------- build one design ----------
 const COL = { deck: 0xffb020, pier: 0xff4fd8, beam: 0x7bd3ff, dome: 0xffffff, door: 0x3ddc84, extra: 0x58c7ff, clear: 0xff5a4f };
+// Deck-height override (inches above the ground at stake 1). null = the design's own height.
+function withDeckHeight(g, deckIn) {
+  if (deckIn == null) return g;
+  const top = deckIn / 12, n = Math.max(1, Math.ceil(deckIn / 7.75) - 1);   // risers <= 7-3/4 in, one tread fewer than risers
+  const steps = g.steps.map((s) => { const [a, b, c, d] = s; const L = Math.hypot(d[0] - a[0], d[1] - a[1]) || 1, run = (n * 11) / 12;
+    const out = (p, q) => [p[0] + ((q[0] - p[0]) / L) * run, p[1] + ((q[1] - p[1]) / L) * run]; return [a, b, out(b, c), out(a, d)]; });
+  return { ...g, deck_top_ft: top, dome_base_ft: top + (g.curb_ft || 0), steps, steps_treads: g.steps.map(() => n) };
+}
 function buildDesign(g) {
   const root = new THREE.Group(); const L = {};
   const layer = (name) => { const grp = new THREE.Group(); grp.name = name; root.add(grp); L[name] = grp; return grp; };
@@ -168,6 +176,13 @@ function buildDesign(g) {
     t.bar(V(j2[0], j2[1], base), V(j2[0], j2[1], base + dh), 0.04);
     t.bar(V(j1[0], j1[1], base + dh), V(j2[0], j2[1], base + dh), 0.04);
     grp.add(t.mesh(COL.door));
+    if ((g.dome.bay || []).length) {   // bay window: outline every clear panel, faint blue fill
+      const tb = new Tris(), tf = new Tris(); let sx = 0, sy = 0, sz = 0;
+      for (const k of g.dome.bay) { const [a, b, c] = g.dome.panels[k]; tb.bar(H[a], H[b], 0.035); tb.bar(H[b], H[c], 0.035); tb.bar(H[c], H[a], 0.035); tf.tri(H[a], H[b], H[c]);
+        for (const i of [a, b, c]) { sx += g.dome.hubs[i][0]; sy += g.dome.hubs[i][1]; sz = Math.max(sz, g.dome.hubs[i][2]); } }
+      grp.add(tb.mesh(0x58c7ff)); grp.add(tf.mesh(0x58c7ff, 0.18));
+      const n = g.dome.bay.length * 3, bl = label('BAY WINDOW', '#a8e3ff', 0.2); bl.position.copy(V((sx / n) * 1.08, (sy / n) * 1.08, base + sz + 0.8)); grp.add(bl);
+    }
     const az = (g.door.az_deg * Math.PI) / 180, r = g.dome.radius_ft;
     const dl = label('DOOR', '#9df5c0', 0.2); dl.position.copy(V(Math.sin(az) * r, Math.cos(az) * r, base + dh + 0.6)); grp.add(dl);
     const cl = label(`dome centre · ${ftin(g.dome.height_ft)} tall`, '#ffffff', 0.14); cl.position.copy(V(0, 0, base + 0.5)); grp.add(cl);
@@ -198,14 +213,13 @@ function buildDesign(g) {
     const H = g.dome.hubs.map((h) => V(h[0], h[1], h[2] + base));
     const zMax = Math.max(...g.dome.hubs.map((h) => h[2])), apex = g.dome.hubs.findIndex((h) => h[2] === zMax);
     const cover = new Tris(), glass = new Tris();
-    for (const tri of g.dome.panels || []) {
-      const hs = tri.map((i) => g.dome.hubs[i]); const cx = (hs[0][0] + hs[1][0] + hs[2][0]) / 3, cy = (hs[0][1] + hs[1][1] + hs[2][1]) / 3, cz = (hs[0][2] + hs[1][2] + hs[2][2]) / 3;
-      const az = ((Math.atan2(cx, cy) * 180) / Math.PI + 360) % 360;
-      const win = (g.dome.windows_az || []).some((w) => Math.abs(((az - w + 540) % 360) - 180) < 13) && cz > 1.5 && cz < 7.5;
-      const sky = g.dome.skylight && tri.includes(apex);
+    const bay = new Set(g.dome.bay || []), frame = new Tris();
+    (g.dome.panels || []).forEach((tri, k) => {
+      const win = bay.has(k), sky = g.dome.skylight && tri.includes(apex);
       (win || sky ? glass : cover).tri(H[tri[0]], H[tri[1]], H[tri[2]]);
-    }
-    grp.add(cover.lit(0xf4f2ec)); grp.add(glass.lit(0x9fd0e6, 0.45));
+      if (win) { frame.bar(H[tri[0]], H[tri[1]], 0.02); frame.bar(H[tri[1]], H[tri[2]], 0.02); frame.bar(H[tri[2]], H[tri[0]], 0.02); }
+    });
+    grp.add(cover.lit(0xf4f2ec)); grp.add(glass.lit(0x5f9fc2, 0.62)); grp.add(frame.lit(0xe9e6dc));
     t = new Tris(); const ring = circlePts(g.dome.radius_ft + 0.05); t.ribbon(ring, base, 0.3); grp.add(t.lit(0xd8d4c8));
     const [j1, j2] = g.door.jambs, dh = g.door.height_ft, az = (g.door.az_deg * Math.PI) / 180, ox = Math.sin(az) * 0.35, oy = Math.cos(az) * 0.35;
     t = new Tris(); t.quad(V(j1[0] + ox, j1[1] + oy, base), V(j2[0] + ox, j2[1] + oy, base), V(j2[0] + ox, j2[1] + oy, base + dh), V(j1[0] + ox, j1[1] + oy, base + dh)); grp.add(t.lit(0x4a3b2c));
@@ -250,11 +264,23 @@ const retMat = new THREE.MeshBasicMaterial({ color: 0x3ddc84, side: THREE.Double
 let DATA = null, design = null, built = null;
 const layerOn = store.get('ccdome_ar_layers', { deck: true, piers: true, beams: false, dome: true, extras: true, clear: false });
 
+let deckIn = store.get('ccdome_ar_deckin', null);
+function deckInches() { return deckIn == null ? Math.round(design.deck_top_ft * 12) : deckIn; }
+function setDeckIn(v) {
+  deckIn = v == null ? null : Math.max(6, Math.min(96, Math.round(v)));
+  if (deckIn != null && Math.abs(deckIn - design.deck_top_ft * 12) < 0.5) deckIn = null;
+  store.set('ccdome_ar_deckin', deckIn); rebuild(); updateReadout(); saveSnapshot();
+}
+function rebuild() {
+  if (built) { model.remove(built.root); dispose(built.root); }
+  built = buildDesign(withDeckHeight(design, deckIn)); model.add(built.root); applyLayers();
+  const h = deckInches(), note = h > 30 ? ' · needs guards' : '';
+  document.querySelectorAll('.jsDeckH').forEach((b) => { b.innerHTML = `${h}" deck<span class="lbl">${deckIn == null ? 'as designed' : 'tap to reset'}${note}</span>`; });
+}
 function setDesign(name) {
   design = DATA.designs.find((d) => d.name === name) || DATA.designs[0];
-  if (built) { model.remove(built.root); dispose(built.root); }
-  built = buildDesign(design); model.add(built.root);
-  applyLayers(); store.set('ccdome_ar_design', design.name);
+  rebuild();
+  store.set('ccdome_ar_design', design.name);
   for (const id of ['design', 'design2']) $(id).value = design.name;
   refreshMarks(); updateReadout();
 }
@@ -364,6 +390,8 @@ function updateReadout() {
 function resultsText() {
   const p = placement(); const L = [];
   L.push(`${design.label}: ${design.piers.length} piers, ${Math.round(design.area_sqft)} sq ft`);
+  { const h = deckInches(), d0 = Math.round(design.deck_top_ft * 12);
+    L.push(`Deck height shown: ${h} in above the ground at stake 1${h !== d0 ? ` (design is ${d0} in; piers, steps and cost are NOT re-run for ${h} in)` : ''}${h > 30 ? '. Over 30 in: guards 36 in high and a stair handrail are required (IRC R312, R311.7.8).' : ''}`); }
   L.push(`Saved ${new Date().toLocaleString()}`);
   if (!p || p.along === undefined) { L.push('', 'Not placed yet.'); return L.join('\n'); }
   L.push('', 'DOME CENTRE (measure from stake 1, sighting toward stake 2)',
@@ -386,7 +414,7 @@ function saveSnapshot() {
   const p = placement(); if (!p || p.along === undefined) return;
   const { u, right } = stakeAxes();
   store.set('ccdome_ar_last', { when: new Date().toISOString(), text: resultsText() });
-  store.set('ccdome_ar_state', { when: new Date().toISOString(), design: design.name, along: p.along, right: p.right, turn: p.turn, height: p.height,
+  store.set('ccdome_ar_state', { when: new Date().toISOString(), design: design.name, deckIn, along: p.along, right: p.right, turn: p.turn, height: p.height,
     marks: marks.map((m) => { const l = m.pos.clone().sub(stake1); return { id: m.id, a: l.dot(u) / FT, r: l.dot(right) / FT, h: l.y / FT, est: !!m.est }; }) });
   refreshLastButton();
 }
@@ -394,6 +422,7 @@ function saveSnapshot() {
 function restoreState() {
   const st = store.get('ccdome_ar_state', null); if (!st || !haveStake2) return;
   if (st.design !== design.name && DATA.designs.some((d) => d.name === st.design)) setDesign(st.design);
+  if (st.deckIn !== undefined && st.deckIn !== deckIn) { deckIn = st.deckIn; store.set('ccdome_ar_deckin', deckIn); rebuild(); }
   const { u, right } = stakeAxes();
   const at = (a, r, h) => stake1.clone().addScaledVector(u, a * FT).addScaledVector(right, r * FT).add(new THREE.Vector3(0, h * FT, 0));
   model.position.copy(at(st.along, st.right, st.height));
@@ -625,6 +654,9 @@ function setUiHidden(on) {
 document.querySelectorAll('.jsShade').forEach((b) => b.addEventListener('click', () => { shaded = !shaded; store.set('ccdome_ar_shaded', shaded); applyLayers(); }));
 document.querySelectorAll('.jsHide').forEach((b) => b.addEventListener('click', () => { openSheet(null); setUiHidden(true); }));
 $('tapback').addEventListener('click', () => setUiHidden(false));
+document.querySelectorAll('.jsDeckDn').forEach((b) => b.addEventListener('click', () => setDeckIn(deckInches() - 3)));
+document.querySelectorAll('.jsDeckUp').forEach((b) => b.addEventListener('click', () => setDeckIn(deckInches() + 3)));
+document.querySelectorAll('.jsDeckH').forEach((b) => b.addEventListener('click', () => setDeckIn(null)));
 function openSheet(which) { show('sheet', !!which); show('sheetMore', which === 'more'); show('sheetResults', which === 'results'); }
 $('btnStart').addEventListener('click', startAR);
 $('btnPlace').addEventListener('click', placeAction);
