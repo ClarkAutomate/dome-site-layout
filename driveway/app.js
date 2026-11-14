@@ -13,7 +13,7 @@ function ftin(ft) { const neg = ft < 0; let i = Math.round(Math.abs(ft) * 12); c
 const sta = (ft) => { const r = Math.round(ft); return `${Math.floor(r / 100)}+${String(r % 100).padStart(2, '0')}`; };
 
 // ---------- design parameters ----------
-const P = Object.assign({ width: 12, depthIn: 12, mode: 'even', slope: 2, baseIn: 6 }, store.get('ccdw_params', {}));
+const P = Object.assign({ width: 12, depthIn: 12, mode: 'ease', maxGrade: 12, balance: 0, method: 'stand', slope: 2, baseIn: 6 }, store.get('ccdw_params2', {}));
 const STEEP = 12;            // % grade flagged as steep for a gravel drive
 const CLEAR_T = 1.35, BASE_T = 1.5;   // rough tons per cubic yard
 
@@ -30,7 +30,14 @@ function compute() {
   const d = P.depthIn / 12, L = s[n - 1];
   let fin;
   if (P.mode === 'follow' || n < 2 || L < 0.5) fin = g.map((v) => v + d);
-  else {   // one even slope end to end, lifted until the shallowest spot still has the full depth
+  else if (P.mode === 'ease') {
+    // Follow the ground, but never steeper than the max grade. U = the lowest line that needs no cut, Lw = the highest
+    // line that needs no fill; any blend of the two also keeps the grade limit, so "balance" trades fill for cut.
+    const m = P.maxGrade / 100, a = P.balance / 100, t = g.map((v) => v + d);
+    fin = t.map((_, i) => { let U = -Infinity, Lw = Infinity;
+      for (let j = 0; j < n; j++) { const k = m * Math.abs(s[i] - s[j]); U = Math.max(U, t[j] - k); Lw = Math.min(Lw, t[j] + k); }
+      return (1 - a) * U + a * Lw; });
+  } else {   // one even slope end to end, lifted until the shallowest spot still has the full depth
     const line = (i) => g[0] + ((g[n - 1] - g[0]) * s[i]) / L;
     let lift = -Infinity; for (let i = 0; i < n; i++) lift = Math.max(lift, g[i] + d - line(i));
     fin = g.map((_, i) => line(i) + lift);
@@ -38,19 +45,20 @@ function compute() {
   const fill = fin.map((v, i) => v - g[i]);
   const grade = []; for (let i = 0; i < n - 1; i++) grade.push(s[i + 1] - s[i] > 0.1 ? ((fin[i + 1] - fin[i]) / (s[i + 1] - s[i])) * 100 : 0);
   // culverts: ground low points with at least 6 in of rise on both sides, plus manual marks
-  const culvert = stations.map((st, i) => {
-    if (st.culvert !== undefined) return st.culvert;
+  const auto = stations.map((st, i) => {
     if (i === 0 || i === n - 1) return false;
     const left = Math.max(...g.slice(0, i)), right = Math.max(...g.slice(i + 1));
-    return g[i] <= g[i - 1] && g[i] <= g[i + 1] && Math.min(left, right) - g[i] >= 0.5;
-  });
+    return g[i] <= g[i - 1] && g[i] <= g[i + 1] && Math.min(left, right) - g[i] >= 1.0;
+  });   // one per dip: keep the lowest within 40 ft
+  for (let i = 0; i < n; i++) if (auto[i]) for (let j = 0; j < n; j++) if (j !== i && auto[j] && Math.abs(s[i] - s[j]) < 40 && (g[j] < g[i] || (g[j] === g[i] && j < i))) { auto[i] = false; break; }
+  const culvert = stations.map((st, i) => (st.culvert !== undefined ? st.culvert : auto[i]));
   const W = P.width, sl = P.slope, base = P.baseIn / 12;
   const area = (h) => (h > 0 ? W * h + sl * h * h : 0), wrap = (h) => (h > 0 ? W + (W + 2 * sl * h) + 2 * h * Math.hypot(1, sl) : 0);
   let fillCy = 0, cutCy = 0, fabric = 0;
   for (let i = 0; i < n - 1; i++) {
     const len = s[i + 1] - s[i];
     fillCy += ((area(fill[i]) + area(fill[i + 1])) / 2) * len / 27;
-    cutCy += ((Math.max(0, -fill[i]) + Math.max(0, -fill[i + 1])) / 2) * W * len / 27;
+    cutCy += ((area(-fill[i]) + area(-fill[i + 1])) / 2) * len / 27;
     fabric += ((wrap(fill[i]) + wrap(fill[i + 1])) / 2) * len;
   }
   const baseCy = (W * base * L) / 27, stoneCy = Math.max(0, fillCy - baseCy);
@@ -136,7 +144,7 @@ function resultsText() {
   if (!r || r.n < 2) return 'Add at least two points along the centreline.';
   if (demo) L.push('DEMO DATA (made up). Start AR on site to survey the real driveway.', '');
   L.push(`Driveway ${Math.round(r.L)} ft long, ${P.width} ft wide, ${r.n} points`,
-    `Grade: ${P.mode === 'even' ? 'one even slope end to end' : 'follows the ground'}, at least ${P.depthIn} in of fill`,
+    `Grade: ${P.mode === 'even' ? 'one even slope end to end' : P.mode === 'follow' ? 'follows the ground' : `follows the ground, eased to ${P.maxGrade}% max, ${P.balance}% cut`}, ${P.depthIn} in of fill on gentle ground`,
     `Steepest grade ${r.maxGrade.toFixed(1)}%${r.maxGrade > STEEP ? '  << STEEP for gravel' : ''} · deepest fill ${ftin(r.maxFill)}${r.minFill < 0 ? ` · deepest cut ${ftin(-r.minFill)}` : ''}`);
   if (closure) L.push(`Loop closure: ${ftin(closure.vert)} vertical, ${ftin(closure.horiz)} horizontal over ${Math.round(closure.walked)} ft walked (corrected)`);
   else if (!demo) L.push('Loop NOT closed: elevations carry uncorrected phone drift.');
@@ -205,12 +213,19 @@ function loadDemo() {
 }
 
 // ---------- actions ----------
+let phoneH = 1.3;   // metres from the ground to the phone, set at the first point
 function addPoint() {
-  if (!reticle.visible || hitKind !== 'plane') { setStatus('No tracked ground under the ring', 'Sweep the phone slowly over the ground until the ring is green.'); return; }
+  const standing = P.method === 'stand' && stations.length > 0;
+  if (!standing && (!reticle.visible || hitKind !== 'plane')) { setStatus('No tracked ground under the ring', 'Sweep the phone slowly over the ground until the ring is green.'); return; }
+  if (standing && !haveCam) { setStatus('Tracking not ready yet'); return; }
   if (closure) { closure = null; }
-  stations.push({ p: reticle.position.clone(), walk: walked });
+  if (!stations.length) { const h = camPos.y - reticle.position.y; phoneH = h > 0.6 && h < 2.0 ? h : 1.3; }
+  // Standing method: the point is under the phone. Phone AR only finds flat patches, so the ring reads slopes as steps;
+  // the phone's own height above its starting point does not have that problem.
+  stations.push({ p: standing ? new THREE.Vector3(camPos.x, camPos.y - phoneH, camPos.z) : reticle.position.clone(), walk: walked });
+  paintDesign();
   const r = compute(), i = r.n - 1; changed();
-  setStatus(`Point ${r.n} at ${sta(r.s[i])}`, r.n === 1 ? 'Walk the centreline and add the next point.' : `Ground ${ftin(r.g[i])} vs the start. Keep going, then close the loop at the first stake.`);
+  setStatus(`Point ${r.n} at ${sta(r.s[i])}`, r.n === 1 ? (P.method === 'stand' ? `Phone height set to ${ftin(phoneH / FT)}. Hold it at that height, stand ON each next point and tap.` : 'Walk the centreline and add the next point.') : `Ground ${ftin(r.g[i])} vs the start. Keep going, then close the loop at the first stake.`);
   if (stations.length === 2) { const st = store.get('ccdw_state', null); if (st && st.pts && st.pts.length > 2) { $('btnRestore').textContent = `Restore ${st.pts.length} saved points (${new Date(st.when).toLocaleDateString()})`; show('btnRestore', true); } }
   else show('btnRestore', false);
 }
@@ -223,9 +238,11 @@ function toggleCulvert() {
 }
 function closeLoop() {
   if (stations.length < 3) { setStatus('Add more points first'); return; }
-  if (!reticle.visible || hitKind !== 'plane') { setStatus('Aim the ring at the FIRST stake', 'Wait for a green ring, then tap Close loop.'); return; }
-  const mis = reticle.position.clone().sub(stations[0].p), T = Math.max(walked, 0.01);
-  if (Math.hypot(mis.x, mis.z) > 5) { setStatus('That is more than 16 ft from the first point', 'Walk back to the first stake and aim the ring at it.'); return; }
+  const stand = P.method === 'stand';
+  if (!stand && (!reticle.visible || hitKind !== 'plane')) { setStatus('Aim the ring at the FIRST stake', 'Wait for a green ring, then tap Close loop.'); return; }
+  const here = stand ? new THREE.Vector3(camPos.x, camPos.y - phoneH, camPos.z) : reticle.position.clone();
+  const mis = here.sub(stations[0].p), T = Math.max(walked, 0.01);
+  if (Math.hypot(mis.x, mis.z) > 5) { setStatus('That is more than 16 ft from the first point', stand ? 'Walk back and stand on the first stake, phone at the same height.' : 'Walk back to the first stake and aim the ring at it.'); return; }
   for (const st of stations) st.p.addScaledVector(mis, -(st.walk / T));
   closure = { horiz: Math.hypot(mis.x, mis.z) / FT, vert: Math.abs(mis.y) / FT, walked: T / FT };
   changed(); setStatus(`Loop closed: ${ftin(closure.vert)} vertical, ${ftin(closure.horiz)} horizontal drift corrected`, 'Results now use the corrected elevations.');
@@ -249,6 +266,7 @@ function onEnd() {
   session = null; hitSource = null; refSpace = null; hitKind = 'none'; reticle.visible = false; scene.background = BG; setUiHidden(false); openSheet(null);
   show('work', false); show('intro', true); show('btnRestore', false);
   if (!stations.length) loadDemo(); else fitPreview();
+  if (store.get('ccdw_state', null)) show('btnLoad', true);
   setStatus(demo ? 'Driveway grading (demo data)' : 'Your surveyed driveway', 'Drag to look around. Results has the numbers.'); updateReadout(); resize();
 }
 function xrFrame(frame) {
@@ -287,11 +305,17 @@ renderer.setAnimationLoop((time, frame) => { if (frame && session) { xrFrame(fra
 // ---------- UI ----------
 function openSheet(which) { show('sheet', !!which); show('sheetDesign', which === 'design'); show('sheetResults', which === 'results'); if (which === 'results') { $('resultsText').textContent = resultsText(); requestAnimationFrame(drawProfile); } if (which === 'design') paintDesign(); }
 function setUiHidden(on) { uiHidden = on; document.body.classList.toggle('clean', on); if (on) { reticle.visible = false; const h = $('tapback').firstElementChild; h.style.animation = 'none'; void h.offsetWidth; h.style.animation = ''; } }
+const MODES = ['ease', 'even', 'follow'];
 function paintDesign() {
-  $('pWidth').textContent = `${P.width} ft wide`; $('pDepth').textContent = `${P.depthIn} in min fill`;
-  $('pMode').textContent = P.mode === 'even' ? 'Grade: one even slope (tap to change)' : 'Grade: follow the ground (tap to change)';
-  $('pModeHelp').textContent = P.mode === 'even' ? 'A straight slope from the first point to the last, lifted until the shallowest spot still has the minimum fill. Dips get filled; this is where the culvert goes.'
-    : 'The road sits the same height above the ground everywhere, so it rises and dips with the land.';
+  $('pWidth').textContent = `${P.width} ft wide`; $('pDepth').textContent = `${P.depthIn} in fill`;
+  $('pGrade').textContent = `${P.maxGrade}% max grade`; $('pBal').textContent = P.balance ? `${P.balance}% cut` : 'no cut';
+  document.querySelectorAll('.easeOnly').forEach((e) => e.classList.toggle('hidden', P.mode !== 'ease'));
+  $('pMode').textContent = { ease: 'Grade: ease the steep parts (tap to change)', even: 'Grade: one even slope (tap to change)', follow: 'Grade: follow the ground (tap to change)' }[P.mode];
+  $('pModeHelp').textContent = { ease: 'Least earthwork. The road follows the ground and only leaves it where the ground is steeper than the max grade. "Cut" lets it dig into the high side there instead of only filling the low side.',
+    even: 'A straight slope from the first point to the last, lifted until the shallowest spot still has the fill depth. Simple, but it buries every dip.',
+    follow: 'The road sits the same height above the ground everywhere, so it is as steep as the land.' }[P.mode];
+  $('pMethod').textContent = P.method === 'stand' ? 'Survey: stand on each point (best on slopes)' : 'Survey: aim the ring at each point';
+  $('btnAdd').textContent = P.method === 'stand' && stations.length && session ? 'Add point where I stand' : 'Add point at ring';
 }
 $('btnStart').addEventListener('click', startAR); $('btnAdd').addEventListener('click', addPoint); $('btnUndo').addEventListener('click', undo);
 $('btnCulvert').addEventListener('click', toggleCulvert); $('btnClose').addEventListener('click', closeLoop); $('btnRestore').addEventListener('click', restoreState);
@@ -303,16 +327,25 @@ document.querySelectorAll('.jsCloseSheet').forEach((b) => b.addEventListener('cl
 document.querySelectorAll('.jsHide').forEach((b) => b.addEventListener('click', () => { openSheet(null); setUiHidden(true); }));
 $('tapback').addEventListener('click', () => setUiHidden(false));
 document.querySelectorAll('[data-p]').forEach((b) => b.addEventListener('click', () => {
-  const k = b.dataset.p, v = P[k] + Number(b.dataset.d); P[k] = k === 'width' ? Math.max(8, Math.min(24, v)) : Math.max(0, Math.min(120, v));
-  store.set('ccdw_params', P); paintDesign(); changed();
+  const k = b.dataset.p, v = P[k] + Number(b.dataset.d), lim = { width: [8, 24], depthIn: [0, 120], maxGrade: [4, 25], balance: [0, 100] }[k]; P[k] = Math.max(lim[0], Math.min(lim[1], v));
+  store.set('ccdw_params2', P); paintDesign(); changed();
 }));
-$('pMode').addEventListener('click', () => { P.mode = P.mode === 'even' ? 'follow' : 'even'; store.set('ccdw_params', P); paintDesign(); changed(); });
+$('pMode').addEventListener('click', () => { P.mode = MODES[(MODES.indexOf(P.mode) + 1) % MODES.length]; store.set('ccdw_params2', P); paintDesign(); changed(); });
+$('pMethod').addEventListener('click', () => { P.method = P.method === 'stand' ? 'ring' : 'stand'; store.set('ccdw_params2', P); paintDesign(); });
+function loadSaved() {
+  const st = store.get('ccdw_state', null); if (!st || !st.pts || st.pts.length < 2) return false;
+  demo = false; closure = st.closure || null;
+  stations = st.pts.map((k) => ({ p: new THREE.Vector3(k.r, k.h, -k.a), walk: 0, culvert: k.c === null ? undefined : k.c }));
+  rebuild(); updateReadout(); fitPreview(); setStatus(`Your survey of ${new Date(st.when).toLocaleDateString()}`, 'Open Design to try different grades, then Results.'); return true;
+}
+$('btnLoad').addEventListener('click', loadSaved);
 $('btnClear').addEventListener('click', () => { stations = []; closure = null; demo = false; if (!session) loadDemo(); else changed(false); openSheet(null); });
 $('btnCopy').addEventListener('click', async () => { try { await navigator.clipboard.writeText($('resultsText').textContent); $('btnCopy').textContent = 'Copied'; } catch { $('btnCopy').textContent = 'Long-press the text to copy'; } setTimeout(() => { $('btnCopy').textContent = 'Copy text'; }, 2500); });
 
 async function boot() {
-  scene.background = BG; resize(); loadDemo();
-  setStatus('Driveway grading (demo data)', 'Drag to look around. Start AR on site to survey the real one.');
+  scene.background = BG; resize(); paintDesign();
+  if (store.get('ccdw_state', null)) show('btnLoad', true);
+  if (!loadSaved()) { loadDemo(); setStatus('Driveway grading (demo data)', 'Drag to look around. Start AR on site to survey the real one.'); }
   let ok = false, why = '';
   if (!window.isSecureContext) why = 'Open this page over https for AR to work.';
   else if (!navigator.xr) why = 'This browser has no WebXR. Use Chrome on the Pixel.';

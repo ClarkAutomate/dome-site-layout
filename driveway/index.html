@@ -43,11 +43,13 @@
     <div class="panel" id="intro">
       <ol>
         <li>Stake both ends of the driveway. Start AR at the first stake.</li>
-        <li>Walk the centreline and tap "Add point" every 15–25 ft, and at every dip and crest.</li>
-        <li>Walk back to the first stake and tap "Close loop" to correct drift.</li>
+        <li>Aim the ring at the first stake by your feet and tap. That sets the phone's height.</li>
+        <li>Hold the phone at that height, stand ON each next point and tap: every 15–25 ft, and at every dip and crest.</li>
+        <li>Walk back, stand on the first stake and tap "Close loop" to correct drift.</li>
       </ol>
       <button class="primary" id="btnStart">Start AR</button>
       <div class="row"><button class="jsDesign">Design</button><button class="jsResults">Results</button><button class="jsHide">Hide buttons</button></div>
+      <div class="row"><button id="btnLoad" class="hidden">Load my last survey</button></div>
       <p id="support"></p>
     </div>
     <div class="panel hidden" id="work">
@@ -68,6 +70,9 @@
       <div class="row"><button data-p="depthIn" data-d="-12">−1 ft</button><button data-p="depthIn" data-d="12">+1 ft</button></div>
       <div class="row"><button id="pMode"></button></div>
       <p id="pModeHelp"></p>
+      <div class="row easeOnly"><button data-p="maxGrade" data-d="-1">−1%</button><button id="pGrade" disabled></button><button data-p="maxGrade" data-d="1">+1%</button></div>
+      <div class="row easeOnly"><button data-p="balance" data-d="-25">less cut</button><button id="pBal" disabled></button><button data-p="balance" data-d="25">more cut</button></div>
+      <div class="row"><button id="pMethod"></button></div>
       <p>Side slopes 2:1, 6" road base on top, clear stone below (from your section drawing).</p>
       <div class="row"><button id="btnClear">Clear all points</button></div>
       <div class="row sticky"><button class="primary jsCloseSheet">Done</button></div>
