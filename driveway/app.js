@@ -248,7 +248,11 @@ function addPoint() {
   if (stations.length === 2) { const st = store.get('ccdw_state', null); if (st && st.pts && st.pts.length > 2) { $('btnRestore').textContent = `Restore ${st.pts.length} saved points (${new Date(st.when).toLocaleDateString()})`; show('btnRestore', true); } }
   else show('btnRestore', false);
 }
-function undo() { if (!stations.length) return; stations.pop(); closure = null; changed(); setStatus(`${stations.length} points`); }
+let preClose = null;
+function undo() {
+  if (closure && preClose && preClose.length === stations.length) { stations.forEach((st, i) => st.p.copy(preClose[i])); closure = null; preClose = null; changed(); setStatus('Loop correction undone', 'Your points are back where you tapped them.'); return; }
+  if (!stations.length) return; stations.pop(); closure = null; preClose = null; changed(); setStatus(`${stations.length} points`);
+}
 function toggleCulvert() {
   const r = compute(); if (!r || !reticle.visible) { setStatus('Aim the ring at a surveyed point first'); return; }
   let best = -1, bd = 3.5; stations.forEach((st, i) => { const d = Math.hypot(st.p.x - reticle.position.x, st.p.z - reticle.position.z); if (d < bd) { bd = d; best = i; } });
@@ -262,9 +266,10 @@ function closeLoop() {
   const here = stand ? new THREE.Vector3(camPos.x, camPos.y - phoneH, camPos.z) : reticle.position.clone();
   const mis = here.sub(stations[0].p), T = Math.max(walked, 0.01);
   if (Math.hypot(mis.x, mis.z) > 5) { setStatus('That is more than 16 ft from the first point', stand ? 'Walk back and stand on the first stake, phone at the same height.' : 'Walk back to the first stake and aim the ring at it.'); return; }
-  for (const st of stations) st.p.addScaledVector(mis, -(st.walk / T));
+  preClose = stations.map((st) => st.p.clone());
+  for (const st of stations) st.p.addScaledVector(mis, -(Math.min(st.walk, T) / T));
   closure = { horiz: Math.hypot(mis.x, mis.z) / FT, vert: Math.abs(mis.y) / FT, walked: T / FT };
-  changed(); setStatus(`Loop closed: ${ftin(closure.vert)} vertical, ${ftin(closure.horiz)} horizontal drift corrected`, 'Results now use the corrected elevations.');
+  changed(); setStatus(`Loop closed: ${ftin(closure.vert)} vertical, ${ftin(closure.horiz)} horizontal drift corrected`, 'No new points were added. Tap Undo to take the correction off.');
 }
 
 // ---------- AR session ----------

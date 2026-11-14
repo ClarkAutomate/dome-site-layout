@@ -1,5 +1,5 @@
 // Offline cache for the AR layout page. Network first (so a re-export shows up on the next load), cache when offline.
-const CACHE = 'ccdome-ar-v7';
+const CACHE = 'ccdome-ar-v8';
 const SHELL = ['./', './index.html', './app.js', './layout.json', './vendor/three.module.min.js', './manifest.webmanifest', './icon.svg', './driveway/', './driveway/index.html', './driveway/app.js'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', (e) => {
