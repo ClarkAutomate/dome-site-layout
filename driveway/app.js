@@ -14,7 +14,7 @@ const sta = (ft) => { const r = Math.round(ft); return `${Math.floor(r / 100)}+$
 
 // ---------- design parameters ----------
 const P = Object.assign({ width: 12, depthIn: 12, mode: 'ease', maxGrade: 12, balance: 0, method: 'stand', slope: 2, baseIn: 6 }, store.get('ccdw_params2', {}));
-const STEEP = 12;            // % grade flagged as steep for a gravel drive
+const STEEP = 12.05;            // % grade flagged as steep for a gravel drive
 const CLEAR_T = 1.35, BASE_T = 1.5;   // rough tons per cubic yard
 
 // ---------- survey data ----------
@@ -169,7 +169,7 @@ function drawProfile() {
   const cv = $('profile'), r = compute(); const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
   cv.width = w * dpr; cv.height = h * dpr; const c = cv.getContext('2d'); c.scale(dpr, dpr); c.clearRect(0, 0, w, h);
   if (!r || r.n < 2) return;
-  const lo = Math.min(...r.g, ...r.fin), hi = Math.max(...r.g, ...r.fin), pad = Math.max(0.5, (hi - lo) * 0.15), m = { l: 38, r: 10, t: 16, b: 22 };
+  const lo = Math.min(...r.g, ...r.fin), hi = Math.max(...r.g, ...r.fin), pad = Math.max(0.5, (hi - lo) * 0.15), m = { l: 50, r: 10, t: 16, b: 22 };
   const X = (s) => m.l + (s / r.L) * (w - m.l - m.r), Y = (z) => h - m.b - ((z - lo + pad) / (hi - lo + 2 * pad)) * (h - m.t - m.b);
   c.font = '11px system-ui,sans-serif'; c.fillStyle = '#b8c4cc'; c.strokeStyle = 'rgba(255,255,255,.12)'; c.lineWidth = 1;
   for (let k = 0; k <= 3; k++) { const z = lo + ((hi - lo) * k) / 3, y = Y(z); c.beginPath(); c.moveTo(m.l, y); c.lineTo(w - m.r, y); c.stroke(); c.textAlign = 'right'; c.fillText(`${z.toFixed(1)} ft`, m.l - 4, y + 4); }
