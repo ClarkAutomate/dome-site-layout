@@ -22,6 +22,8 @@
   button.primary { background:var(--accent); color:#1b1300; border-color:transparent; font-weight:700; font-size:17px; min-height:54px; width:100%; }
   .row { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; } .row > * { flex:1 1 0; }
   .hidden { display:none !important; }
+  .hrow { display:flex; align-items:center; gap:10px; min-height:44px; font-variant-numeric:tabular-nums; } .hrow span:first-child { width:56px; }
+  .hrow input { font:inherit; color:var(--ink); background:rgba(255,255,255,.10); border:1px solid var(--line); border-radius:8px; padding:8px; width:110px; }
   .lbl { display:block; font-size:11px; color:var(--dim); line-height:1.1; }
   #sheet { position:fixed; inset:0; background:#0a0e12; padding:max(14px,env(safe-area-inset-top)) 14px 14px; overflow:auto; z-index:5; }
   #sheet h2 { margin:0 0 8px; font-size:18px; } #sheet p { color:var(--dim); margin:4px 0 8px; }
@@ -73,8 +75,16 @@
       <div class="row easeOnly"><button data-p="maxGrade" data-d="-1">−1%</button><button id="pGrade" disabled></button><button data-p="maxGrade" data-d="1">+1%</button></div>
       <div class="row easeOnly"><button data-p="balance" data-d="-25">less cut</button><button id="pBal" disabled></button><button data-p="balance" data-d="25">more cut</button></div>
       <div class="row"><button id="pMethod"></button></div>
-      <p>Side slopes 2:1, 6" road base on top, clear stone below (from your section drawing).</p>
+      <div class="row"><button data-p="baseIn" data-d="-1">−1"</button><button id="pBase" disabled></button><button data-p="baseIn" data-d="1">+1"</button></div>
+      <div class="row"><button id="btnHeights">Edit ground heights</button></div>
+      <p>Side slopes 2:1. 33C on top for the full length, dirt fill below it, 3–4 in rock at each culvert.</p>
       <div class="row"><button id="btnClear">Clear all points</button></div>
+      <div class="row sticky"><button class="primary jsCloseSheet">Done</button></div>
+    </div>
+    <div id="sheetHeights" class="hidden">
+      <h2>Ground heights</h2>
+      <p>Height of the ground at each point, in feet above (+) or below (−) the first point. Type over any value you have measured with a level.</p>
+      <div id="heightsList"></div>
       <div class="row sticky"><button class="primary jsCloseSheet">Done</button></div>
     </div>
     <div id="sheetResults" class="hidden">

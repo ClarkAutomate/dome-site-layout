@@ -13,9 +13,17 @@ function ftin(ft) { const neg = ft < 0; let i = Math.round(Math.abs(ft) * 12); c
 const sta = (ft) => { const r = Math.round(ft); return `${Math.floor(r / 100)}+${String(r % 100).padStart(2, '0')}`; };
 
 // ---------- design parameters ----------
-const P = Object.assign({ width: 12, depthIn: 12, mode: 'ease', maxGrade: 12, balance: 0, method: 'stand', slope: 2, baseIn: 6 }, store.get('ccdw_params2', {}));
+const P = Object.assign({ width: 12, depthIn: 6, mode: 'ease', maxGrade: 12, balance: 50, method: 'stand', slope: 2, baseIn: 6 }, store.get('ccdw_params3', {}));
 const STEEP = 12.05;            // % grade flagged as steep for a gravel drive
-const CLEAR_T = 1.35, BASE_T = 1.5;   // rough tons per cubic yard
+// Material assumptions (rough; confirm with the quarry ticket)
+const T33C = 2.0;            // tons per cubic yard of crusher-run base compacted in place (Ohio DOT factor, 4,000 lb/cu yd)
+const WASTE = 1.07;          // ordering allowance for waste and uneven subgrade
+const TROCK = 1.45;          // tons per cubic yard of 3-4 in rock, as dumped
+const TANDEM_T = 14, TRIAXLE_T = 22;   // typical payload, tons (ask the hauler for their usual ticket weight)
+const PIPE_IN = 18, COVER_IN = 12;     // culvert pipe diameter and the minimum cover over it
+const DIRT_LOAD_CY = 10;     // cubic yards of dirt per tandem load
+const ROCK_LEN = 20;         // ft of embankment built from rock at each culvert
+const APRON_CY = 4;          // rock pads at the inlet and outlet, about 2 cu yd per pipe end
 
 // ---------- survey data ----------
 let stations = [];           // {p: Vector3 (world, ground), walk: metres walked when tapped, culvert: true|false|undefined}
@@ -42,9 +50,6 @@ function compute() {
     let lift = -Infinity; for (let i = 0; i < n; i++) lift = Math.max(lift, g[i] + d - line(i));
     fin = g.map((_, i) => line(i) + lift);
   }
-  const fill = fin.map((v, i) => v - g[i]);
-  const grade = []; for (let i = 0; i < n - 1; i++) grade.push(s[i + 1] - s[i] > 0.1 ? ((fin[i + 1] - fin[i]) / (s[i + 1] - s[i])) * 100 : 0);
-  // culverts: ground low points with at least 6 in of rise on both sides, plus manual marks
   const auto = stations.map((st, i) => {
     if (i === 0 || i === n - 1) return false;
     const left = Math.max(...g.slice(0, i)), right = Math.max(...g.slice(i + 1));
@@ -52,6 +57,12 @@ function compute() {
   });   // one per dip: keep the lowest within 40 ft
   for (let i = 0; i < n; i++) if (auto[i]) for (let j = 0; j < n; j++) if (j !== i && auto[j] && Math.abs(s[i] - s[j]) < 40 && (g[j] < g[i] || (g[j] === g[i] && j < i))) { auto[i] = false; break; }
   const culvert = stations.map((st, i) => (st.culvert !== undefined ? st.culvert : auto[i]));
+  // lift the road over each culvert so the pipe has its cover, keeping the grade limit either side
+  const need = (PIPE_IN + COVER_IN) / 12, mg = (P.mode === 'ease' ? P.maxGrade : 12) / 100;
+  fin = fin.map((v, i) => { let f = v; for (let j = 0; j < n; j++) if (culvert[j]) f = Math.max(f, g[j] + need - mg * Math.abs(s[i] - s[j])); return f; });
+  const fill = fin.map((v, i) => v - g[i]);
+  const grade = []; for (let i = 0; i < n - 1; i++) grade.push(s[i + 1] - s[i] > 0.1 ? ((fin[i + 1] - fin[i]) / (s[i + 1] - s[i])) * 100 : 0);
+  // culverts: ground low points with at least 6 in of rise on both sides, plus manual marks
   const W = P.width, sl = P.slope, base = P.baseIn / 12;
   const area = (h) => (h > 0 ? W * h + sl * h * h : 0), wrap = (h) => (h > 0 ? W + (W + 2 * sl * h) + 2 * h * Math.hypot(1, sl) : 0);
   let fillCy = 0, cutCy = 0, fabric = 0;
@@ -61,9 +72,11 @@ function compute() {
     cutCy += ((area(-fill[i]) + area(-fill[i + 1])) / 2) * len / 27;
     fabric += ((wrap(fill[i]) + wrap(fill[i + 1])) / 2) * len;
   }
-  const baseCy = (W * base * L) / 27, stoneCy = Math.max(0, fillCy - baseCy);
+  const baseCy = (W * base * L) / 27;   // 33C surface, full length
+  let rockCy = 0; for (let i = 0; i < n; i++) if (culvert[i]) rockCy += Math.max(0, area(fill[i]) - W * base) * ROCK_LEN / 27 + APRON_CY;
+  const bodyCy = Math.max(0, fillCy - baseCy), dirtCy = Math.max(0, bodyCy - Math.min(rockCy, bodyCy)), haulCy = Math.max(0, dirtCy - cutCy), stoneCy = bodyCy;
   const culverts = culvert.map((c, i) => (c ? { i, len: W + 2 * sl * Math.max(0, fill[i]) + 2 } : null)).filter(Boolean);
-  return { n, s, g, fin, fill, grade, culvert, culverts, L, fillCy, cutCy, baseCy, stoneCy, fabric: fabric * 1.1,
+  return { n, s, g, fin, fill, grade, culvert, culverts, L, fillCy, cutCy, baseCy, stoneCy, rockCy, dirtCy, haulCy, fabric: fabric * 1.1,
            maxFill: Math.max(...fill), minFill: Math.min(...fill), maxGrade: grade.length ? Math.max(...grade.map(Math.abs)) : 0,
            dams: Math.floor((L * FT) / 17.5) };
 }
@@ -154,14 +167,20 @@ function resultsText() {
   L.push('', 'CULVERTS');
   if (!r.culverts.length) L.push('  none found (no dip of 6 in or more). Use "Culvert here" to add one.');
   for (const c of r.culverts) L.push(`  at ${sta(r.s[c.i])}: about ${Math.ceil(c.len)} ft of pipe under ${ftin(Math.max(0, r.fill[c.i]))} of fill. Size the diameter from the area that drains to it.`);
-  L.push('', 'ROUGH QUANTITIES (2:1 side slopes, level ground across the road)',
-    `  total fill        ${Math.round(r.fillCy)} cu yd`,
-    `  road base ${P.baseIn} in    ${Math.round(r.baseCy)} cu yd  (~${Math.round(r.baseCy * BASE_T)} tons)`,
-    `  clear stone       ${Math.round(r.stoneCy)} cu yd  (~${Math.round(r.stoneCy * CLEAR_T)} tons)`,
-    `  cut               ${Math.round(r.cutCy)} cu yd`,
-    `  geotextile wrap   ${Math.round(r.fabric)} sq ft (incl. 10% overlap)`,
-    `  4 in perforated pipe  ${Math.round(r.L)} ft`,
-    `  clay trench dams  ${r.dams} (one every 15-20 m)`);
+  const t33 = r.baseCy * T33C, tRock = r.rockCy * TROCK, loads = (t, cap) => Math.ceil(t / cap);
+  L.push('', `33C SURFACE (${P.baseIn} in compacted, ${P.width} ft wide, full length)`,
+    `  ${Math.round(r.baseCy)} cu yd in place = about ${Math.round(t33)} tons; order about ${Math.round(t33 * WASTE)} tons with 7% waste`,
+    `  ${loads(t33 * WASTE, TRIAXLE_T)} tri-axle loads (${TRIAXLE_T} t each) or ${loads(t33 * WASTE, TANDEM_T)} tandem loads (${TANDEM_T} t each)`,
+    '', 'EARTHWORK (2:1 side slopes, level ground across the road)',
+    `  fill under the 33C   ${Math.round(r.stoneCy)} cu yd`,
+    `    of which rock at culverts  ${Math.round(Math.min(r.rockCy, r.stoneCy))} cu yd`,
+    `    of which dirt              ${Math.round(r.dirtCy)} cu yd`,
+    `  cut at the steep parts ${Math.round(r.cutCy)} cu yd (reuse as fill if it is good dirt)`,
+    `  dirt to bring from elsewhere  ${Math.round(r.haulCy)} cu yd = about ${Math.ceil(r.haulCy / DIRT_LOAD_CY)} tandem loads of ${DIRT_LOAD_CY} cu yd`,
+    '', `3-4 IN ROCK AT CULVERTS (${r.culverts.length})`,
+    `  ${Math.round(r.rockCy)} cu yd = about ${Math.round(tRock)} tons = ${loads(tRock, TRIAXLE_T)} tri-axle or ${loads(tRock, TANDEM_T)} tandem loads`,
+    `  assumes ${ROCK_LEN} ft of the embankment in rock at each culvert, plus rock pads at both pipe ends (about 2 cu yd each)`,
+    `  road lifted to give each ${PIPE_IN} in pipe ${COVER_IN} in of cover; bed the pipe itself in 33C or 3/4 in stone, not the big rock`);
   L.push('', 'Phone AR elevations can be off by a foot or more over a long walk. Check key heights with a laser or water level before ordering stone.');
   return L.join('\n');
 }
@@ -182,16 +201,16 @@ function drawProfile() {
 }
 
 // ---------- state ----------
-let session = null, hitSource = null, refSpace = null, hitKind = 'none', uiHidden = false;
+let session = null, hitSource = null, refSpace = null, hitKind = 'none', uiHidden = false, depthLive = false;
 const camPos = new THREE.Vector3(), camDir = new THREE.Vector3(), lastCam = new THREE.Vector3(); let walked = 0, haveCam = false;
 function setStatus(a, b = '') { $('status').innerHTML = `${a}${b ? `<small>${b}</small>` : ''}`; }
 function show(id, on) { $(id).classList.toggle('hidden', !on); }
 function changed(save = true) { rebuild(); updateReadout(); if (save) saveState(); }
 function updateReadout() {
   const r = compute(), el = $('readout');
-  if (!r) { el.textContent = session ? `ground: ${hitKind === 'plane' ? 'tracked' : 'searching…'}` : ''; return; }
+  if (!r) { el.textContent = session ? `ground: ${depthLive ? 'depth' : hitKind === 'plane' ? 'tracked' : 'searching…'}` : ''; return; }
   el.innerHTML = `${demo ? 'Demo · ' : ''}<b>${r.n}</b> points · <b>${Math.round(r.L)} ft</b> · deepest fill <b>${ftin(r.maxFill)}</b> · steepest <b>${r.maxGrade.toFixed(1)}%</b>\n`
-    + `Fill <b>${Math.round(r.fillCy)} cu yd</b> · culverts <b>${r.culverts.length}</b>${session ? ` · ground ${hitKind === 'plane' ? 'tracked' : 'searching…'}` : ''}${closure ? ' · loop closed' : ''}`;
+    + `Fill <b>${Math.round(r.fillCy)} cu yd</b> · culverts <b>${r.culverts.length}</b>${session ? ` · ground ${depthLive ? 'depth' : hitKind === 'plane' ? 'tracked' : 'searching…'}` : ''}${closure ? ' · loop closed' : ''}`;
 }
 // saved in the frame of the first two points, so the survey can be restored from those two stakes
 function axes() { const u = stations[1].p.clone().sub(stations[0].p); u.y = 0; u.normalize(); return { u, right: new THREE.Vector3(-u.z, 0, u.x) }; }
@@ -252,7 +271,8 @@ function closeLoop() {
 async function startAR() {
   let s = null;
   try {
-    s = await navigator.xr.requestSession('immersive-ar', { requiredFeatures: ['hit-test', 'dom-overlay'], domOverlay: { root: $('overlay') } });
+    s = await navigator.xr.requestSession('immersive-ar', { requiredFeatures: ['hit-test', 'dom-overlay'], optionalFeatures: ['depth-sensing'], domOverlay: { root: $('overlay') },
+      depthSensing: { usagePreference: ['cpu-optimized'], dataFormatPreference: ['luminance-alpha', 'unsigned-short'] } });
     s.addEventListener('end', onEnd);
     renderer.xr.setReferenceSpaceType('local'); await renderer.xr.setSession(s);
     session = s; scene.background = null;
@@ -275,10 +295,18 @@ function xrFrame(frame) {
   if (vp) { const t = vp.transform; camPos.set(t.position.x, t.position.y, t.position.z);
     camDir.set(0, 0, -1).applyQuaternion(new THREE.Quaternion(t.orientation.x, t.orientation.y, t.orientation.z, t.orientation.w));
     if (haveCam) { const d = Math.hypot(camPos.x - lastCam.x, camPos.z - lastCam.z); if (d > 0.05 && d < 3) { walked += d; lastCam.copy(camPos); } else if (d >= 3) lastCam.copy(camPos); } else { lastCam.copy(camPos); haveCam = true; } }
-  let got = false;
-  if (hitSource) { const hits = frame.getHitTestResults(hitSource); if (hits.length) { const pose = hits[0].getPose(refSpace);
+  let got = false, depthOk = false;
+  // Real depth under the ring where the phone offers it: it follows slopes, which flat-plane hits do not.
+  if (vp && vp.views.length && frame.getDepthInformation) {
+    try {
+      const info = frame.getDepthInformation(vp.views[0]);
+      if (info) { const ds = []; for (const [u, v] of [[0.5, 0.5], [0.47, 0.5], [0.53, 0.5], [0.5, 0.47], [0.5, 0.53]]) { const z = info.getDepthInMeters(u, v); if (z > 0.3 && z < 6) ds.push(z); }
+        if (ds.length >= 3) { ds.sort((a, b) => a - b); reticle.position.copy(camPos).addScaledVector(camDir, ds[ds.length >> 1]); got = depthOk = true; } }
+    } catch { /* depth not granted on this phone */ }
+  }
+  if (!got && hitSource) { const hits = frame.getHitTestResults(hitSource); if (hits.length) { const pose = hits[0].getPose(refSpace);
     if (pose) { reticle.position.set(pose.transform.position.x, pose.transform.position.y, pose.transform.position.z); got = true; } } }
-  hitKind = got ? 'plane' : 'none'; reticle.visible = got && !uiHidden;
+  hitKind = got ? 'plane' : 'none'; depthLive = depthOk; retMat.color.set(depthOk ? 0x58c7ff : 0x3ddc84); reticle.visible = got && !uiHidden;
 }
 
 // ---------- preview camera ----------
@@ -303,12 +331,19 @@ let lastRead = 0;
 renderer.setAnimationLoop((time, frame) => { if (frame && session) { xrFrame(frame); if (time - lastRead > 500) { lastRead = time; updateReadout(); } } else placePreviewCamera(); renderer.render(scene, camera); });
 
 // ---------- UI ----------
-function openSheet(which) { show('sheet', !!which); show('sheetDesign', which === 'design'); show('sheetResults', which === 'results'); if (which === 'results') { $('resultsText').textContent = resultsText(); requestAnimationFrame(drawProfile); } if (which === 'design') paintDesign(); }
+function paintHeights() {
+  const r = compute(), box = $('heightsList'); box.innerHTML = ''; if (!r) return;
+  r.s.forEach((sv, i) => { const row = document.createElement('label'); row.className = 'hrow';
+    row.innerHTML = `<span>${sta(sv)}</span><input type="number" step="0.1" inputmode="decimal" value="${r.g[i].toFixed(1)}" ${i === 0 ? 'disabled' : ''}><span>ft</span>`;
+    row.querySelector('input').addEventListener('change', (e) => { const v = parseFloat(e.target.value); if (!Number.isFinite(v)) return; stations[i].p.y = stations[0].p.y + v * FT; changed(); });
+    box.appendChild(row); });
+}
+function openSheet(which) { show('sheet', !!which); show('sheetDesign', which === 'design'); show('sheetResults', which === 'results'); show('sheetHeights', which === 'heights'); if (which === 'heights') paintHeights(); if (which === 'results') { $('resultsText').textContent = resultsText(); requestAnimationFrame(drawProfile); } if (which === 'design') paintDesign(); }
 function setUiHidden(on) { uiHidden = on; document.body.classList.toggle('clean', on); if (on) { reticle.visible = false; const h = $('tapback').firstElementChild; h.style.animation = 'none'; void h.offsetWidth; h.style.animation = ''; } }
 const MODES = ['ease', 'even', 'follow'];
 function paintDesign() {
   $('pWidth').textContent = `${P.width} ft wide`; $('pDepth').textContent = `${P.depthIn} in fill`;
-  $('pGrade').textContent = `${P.maxGrade}% max grade`; $('pBal').textContent = P.balance ? `${P.balance}% cut` : 'no cut';
+  $('pGrade').textContent = `${P.maxGrade}% max grade`; $('pBase').textContent = `${P.baseIn} in of 33C`; $('pBal').textContent = P.balance ? `${P.balance}% cut` : 'no cut';
   document.querySelectorAll('.easeOnly').forEach((e) => e.classList.toggle('hidden', P.mode !== 'ease'));
   $('pMode').textContent = { ease: 'Grade: ease the steep parts (tap to change)', even: 'Grade: one even slope (tap to change)', follow: 'Grade: follow the ground (tap to change)' }[P.mode];
   $('pModeHelp').textContent = { ease: 'Least earthwork. The road follows the ground and only leaves it where the ground is steeper than the max grade. "Cut" lets it dig into the high side there instead of only filling the low side.',
@@ -327,11 +362,11 @@ document.querySelectorAll('.jsCloseSheet').forEach((b) => b.addEventListener('cl
 document.querySelectorAll('.jsHide').forEach((b) => b.addEventListener('click', () => { openSheet(null); setUiHidden(true); }));
 $('tapback').addEventListener('click', () => setUiHidden(false));
 document.querySelectorAll('[data-p]').forEach((b) => b.addEventListener('click', () => {
-  const k = b.dataset.p, v = P[k] + Number(b.dataset.d), lim = { width: [8, 24], depthIn: [0, 120], maxGrade: [4, 25], balance: [0, 100] }[k]; P[k] = Math.max(lim[0], Math.min(lim[1], v));
-  store.set('ccdw_params2', P); paintDesign(); changed();
+  const k = b.dataset.p, v = P[k] + Number(b.dataset.d), lim = { width: [8, 24], depthIn: [0, 120], maxGrade: [4, 25], balance: [0, 100], baseIn: [2, 12] }[k]; P[k] = Math.max(lim[0], Math.min(lim[1], v));
+  store.set('ccdw_params3', P); paintDesign(); changed();
 }));
-$('pMode').addEventListener('click', () => { P.mode = MODES[(MODES.indexOf(P.mode) + 1) % MODES.length]; store.set('ccdw_params2', P); paintDesign(); changed(); });
-$('pMethod').addEventListener('click', () => { P.method = P.method === 'stand' ? 'ring' : 'stand'; store.set('ccdw_params2', P); paintDesign(); });
+$('pMode').addEventListener('click', () => { P.mode = MODES[(MODES.indexOf(P.mode) + 1) % MODES.length]; store.set('ccdw_params3', P); paintDesign(); changed(); });
+$('pMethod').addEventListener('click', () => { P.method = P.method === 'stand' ? 'ring' : 'stand'; store.set('ccdw_params3', P); paintDesign(); });
 function loadSaved() {
   const st = store.get('ccdw_state', null); if (!st || !st.pts || st.pts.length < 2) return false;
   demo = false; closure = st.closure || null;
@@ -339,6 +374,7 @@ function loadSaved() {
   rebuild(); updateReadout(); fitPreview(); setStatus(`Your survey of ${new Date(st.when).toLocaleDateString()}`, 'Open Design to try different grades, then Results.'); return true;
 }
 $('btnLoad').addEventListener('click', loadSaved);
+$('btnHeights').addEventListener('click', () => openSheet('heights'));
 $('btnClear').addEventListener('click', () => { stations = []; closure = null; demo = false; if (!session) loadDemo(); else changed(false); openSheet(null); });
 $('btnCopy').addEventListener('click', async () => { try { await navigator.clipboard.writeText($('resultsText').textContent); $('btnCopy').textContent = 'Copied'; } catch { $('btnCopy').textContent = 'Long-press the text to copy'; } setTimeout(() => { $('btnCopy').textContent = 'Copy text'; }, 2500); });
 
