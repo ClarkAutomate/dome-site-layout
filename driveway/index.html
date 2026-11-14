@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#10161c">
+<link rel="icon" href="../icon.svg">
+<title>Driveway Grading</title>
+<style>
+  :root { --ink:#f3f6f8; --dim:#b8c4cc; --panel:rgba(16,22,28,.82); --line:rgba(255,255,255,.22); --accent:#ffb020; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; height:100%; background:#10161c; color:var(--ink); overflow:hidden; font:15px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  canvas#view { position:fixed; inset:0; width:100%; height:100%; display:block; touch-action:none; }
+  #overlay { position:fixed; inset:0; pointer-events:none; display:flex; flex-direction:column; justify-content:space-between;
+             padding:max(10px,env(safe-area-inset-top)) 10px max(12px,env(safe-area-inset-bottom)); }
+  #overlay > * { pointer-events:auto; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:10px 12px; backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px); }
+  #status { font-weight:600; } #status small { display:block; font-weight:400; color:var(--dim); margin-top:2px; }
+  #readout { font-variant-numeric:tabular-nums; font-size:13px; color:var(--dim); white-space:pre-line; } #readout b { color:var(--ink); }
+  button { font:inherit; color:var(--ink); background:rgba(255,255,255,.10); border:1px solid var(--line); border-radius:10px; min-height:44px; padding:8px 10px; touch-action:manipulation; }
+  button:active { background:rgba(255,255,255,.28); } button:disabled { opacity:.4; }
+  button.primary { background:var(--accent); color:#1b1300; border-color:transparent; font-weight:700; font-size:17px; min-height:54px; width:100%; }
+  .row { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; } .row > * { flex:1 1 0; }
+  .hidden { display:none !important; }
+  .lbl { display:block; font-size:11px; color:var(--dim); line-height:1.1; }
+  #sheet { position:fixed; inset:0; background:#0a0e12; padding:max(14px,env(safe-area-inset-top)) 14px 14px; overflow:auto; z-index:5; }
+  #sheet h2 { margin:0 0 8px; font-size:18px; } #sheet p { color:var(--dim); margin:4px 0 8px; }
+  #sheet pre { white-space:pre-wrap; font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace; margin:8px 0 12px; }
+  #profile { width:100%; height:190px; display:block; border:1px solid var(--line); border-radius:10px; }
+  .sticky { position:sticky; bottom:0; background:#0a0e12; padding-top:8px; }
+  #intro ol { margin:6px 0 8px; padding-left:20px; color:var(--dim); } #support { color:var(--dim); margin:6px 0 0; }
+  #tapback { position:fixed; inset:0; display:none; z-index:6; align-items:flex-end; justify-content:center; padding-bottom:max(18px,env(safe-area-inset-bottom)); }
+  #tapback span { background:var(--panel); border-radius:20px; padding:8px 14px; font-size:13px; animation:fadeout 2.6s forwards; }
+  @keyframes fadeout { 0%,70% { opacity:1; } 100% { opacity:0; } }
+  body.clean #top, body.clean #bottom, body.clean #sheet { display:none !important; } body.clean #tapback { display:flex; }
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="overlay">
+  <div id="top"><div class="panel"><div id="status">Loading…</div><div id="readout"></div></div></div>
+  <div id="bottom">
+    <div class="panel" id="intro">
+      <ol>
+        <li>Stake both ends of the driveway. Start AR at the first stake.</li>
+        <li>Walk the centreline and tap "Add point" every 15–25 ft, and at every dip and crest.</li>
+        <li>Walk back to the first stake and tap "Close loop" to correct drift.</li>
+      </ol>
+      <button class="primary" id="btnStart">Start AR</button>
+      <div class="row"><button class="jsDesign">Design</button><button class="jsResults">Results</button><button class="jsHide">Hide buttons</button></div>
+      <p id="support"></p>
+    </div>
+    <div class="panel hidden" id="work">
+      <button class="primary" id="btnAdd">Add point at ring</button>
+      <div class="row"><button id="btnUndo">Undo</button><button id="btnCulvert">Culvert here</button><button id="btnClose">Close loop</button></div>
+      <div class="row"><button class="jsDesign">Design</button><button class="jsResults">Results</button><button class="jsHide">Hide</button></div>
+      <div class="row"><button id="btnRestore" class="hidden"></button></div>
+      <div class="row"><button id="btnExit">Exit AR</button></div>
+    </div>
+  </div>
+  <div id="tapback"><span>Tap anywhere to bring the buttons back</span></div>
+  <div id="sheet" class="hidden">
+    <div id="sheetDesign" class="hidden">
+      <h2>Driveway design</h2>
+      <p>These drive the finished surface, the fill and the quantities.</p>
+      <div class="row"><button data-p="width" data-d="-1">−1 ft</button><button id="pWidth" disabled></button><button data-p="width" data-d="1">+1 ft</button></div>
+      <div class="row"><button data-p="depthIn" data-d="-3">−3"</button><button id="pDepth" disabled></button><button data-p="depthIn" data-d="3">+3"</button></div>
+      <div class="row"><button data-p="depthIn" data-d="-12">−1 ft</button><button data-p="depthIn" data-d="12">+1 ft</button></div>
+      <div class="row"><button id="pMode"></button></div>
+      <p id="pModeHelp"></p>
+      <p>Side slopes 2:1, 6" road base on top, clear stone below (from your section drawing).</p>
+      <div class="row"><button id="btnClear">Clear all points</button></div>
+      <div class="row sticky"><button class="primary jsCloseSheet">Done</button></div>
+    </div>
+    <div id="sheetResults" class="hidden">
+      <h2>Grading results</h2>
+      <canvas id="profile"></canvas>
+      <pre id="resultsText"></pre>
+      <div class="row sticky"><button id="btnCopy">Copy text</button><button class="primary jsCloseSheet">Done</button></div>
+    </div>
+  </div>
+</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>
